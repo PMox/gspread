@@ -47,11 +47,15 @@ class Client(object):
     >>>
 
     """
-    def __init__(self, auth, http_session=None):
+    def __init__(self, auth, http_session=None, token=None):
         self.auth = auth
+        self.token = token
 
         if not http_session:
             self.session = HTTPSession()
+
+    def get_auth_token(self):
+        return self.token
 
     def _get_auth_token(self, content):
         for line in content.splitlines():
@@ -73,36 +77,46 @@ class Client(object):
         :raises AuthenticationError: if login attempt fails.
 
         """
-        source = 'burnash-gspread-%s' % __version__
-        service = 'wise'
 
-        data = {'Email': self.auth[0],
-                'Passwd': self.auth[1],
+        if self.token is None:
+
+            source = 'burnash-gspread-%s' % __version__
+            service = 'wise'
+
+            data = {
+                'Email':       self.auth[0],
+                'Passwd':      self.auth[1],
                 'accountType': 'HOSTED_OR_GOOGLE',
-                'service': service,
-                'source': source}
+                'service':     service,
+                'source':      source,
+            }
 
-        url = AUTH_SERVER + '/accounts/ClientLogin'
+            url = AUTH_SERVER + '/accounts/ClientLogin'
 
-        try:
-            r = self.session.post(url, data)
-            content = r.read().decode()
-            token = self._get_auth_token(content)
-            auth_header = "GoogleLogin auth=%s" % token
-            self.session.add_header('Authorization', auth_header)
+            try:
+                r = self.session.post(url, data)
+            except HTTPError as ex:
+                if ex.code == 403:
+                    content = ex.read().decode()
+                    if content.strip() == 'Error=BadAuthentication':
+                        raise AuthenticationError("Incorrect username or password")
+                    else:
+                        raise AuthenticationError(
+                            "Unable to authenticate. %s code" % ex.code)
 
-        except HTTPError as ex:
-            if ex.code == 403:
-                content = ex.read().decode()
-                if content.strip() == 'Error=BadAuthentication':
-                    raise AuthenticationError("Incorrect username or password")
                 else:
                     raise AuthenticationError(
                         "Unable to authenticate. %s code" % ex.code)
 
-            else:
-                raise AuthenticationError(
-                    "Unable to authenticate. %s code" % ex.code)
+            content = r.read().decode()
+            token = self._get_auth_token(content)
+            self.token = token
+
+        auth_header = "GoogleLogin auth=%s" % self.token
+        self.session.add_header('Authorization', auth_header)
+
+        return
+
 
     def open(self, title):
         """Opens a spreadsheet, returning a :class:`~gspread.Spreadsheet` instance.
@@ -272,7 +286,7 @@ class Client(object):
         return ElementTree.fromstring(r.read())
 
 
-def login(email, password):
+def login(email, password, token=None):
     """Login to Google API using `email` and `password`.
 
     This is a shortcut function which instantiates :class:`Client`
@@ -281,6 +295,15 @@ def login(email, password):
     :returns: :class:`Client` instance.
 
     """
-    client = Client(auth=(email, password))
+    if token is None:
+        client = Client(auth=(email, password))
+    else:
+        client = Client(auth=(email, None), token=token)
     client.login()
     return client
+
+
+#
+# vi: ts=4 sw=4 et fenc=utf-8 syntax=python :
+#
+
